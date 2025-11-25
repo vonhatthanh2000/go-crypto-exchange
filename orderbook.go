@@ -84,8 +84,8 @@ func (b ByBestBid) Less(i, j int) bool { return b.Limits[i].Price > b.Limits[j].
 func (b ByBestBid) Swap(i, j int)      { b.Limits[i], b.Limits[j] = b.Limits[j], b.Limits[i] }
 
 type OrderBook struct {
-	Bids []*Limit
-	Asks []*Limit
+	bids []*Limit
+	asks []*Limit
 
 	BidLimits map[float64]*Limit
 	AskLimits map[float64]*Limit
@@ -93,44 +93,41 @@ type OrderBook struct {
 
 func NewOrderBook() *OrderBook {
 	return &OrderBook{
-		Bids:      []*Limit{},
-		Asks:      []*Limit{},
+		bids:      []*Limit{},
+		asks:      []*Limit{},
 		BidLimits: make(map[float64]*Limit),
 		AskLimits: make(map[float64]*Limit),
 	}
 }
 
-func (ob *OrderBook) PlaceOrder(price float64, o *Order) {
-
-	// 1. Try to match the order
-
-	// 2. Add the rest of order to the order book
-
-	if o.Size > 0.00 {
-		ob.addOrderToOrderBook(price, o)
-	}
-
-}
-
-func (ob *OrderBook) addOrderToOrderBook(price float64, o *Order) {
+func (ob *OrderBook) PlaceLimitOrder(price float64, o *Order) {
 
 	var limit *Limit
 	if o.Bid {
 		limit = ob.BidLimits[price]
 		if limit == nil {
 			limit = NewLimit(price)
-			ob.Bids = append(ob.Bids, limit)
+			ob.bids = append(ob.bids, limit)
 			ob.BidLimits[price] = limit
 		}
 	} else {
 		limit = ob.AskLimits[price]
 		if limit == nil {
 			limit = NewLimit(price)
-			ob.Asks = append(ob.Asks, limit)
+			ob.asks = append(ob.asks, limit)
 			ob.AskLimits[price] = limit
 		}
 	}
 
 	limit.addOrder(o)
+}
 
+func (ob *OrderBook) Asks() Limits {
+	sort.Sort(ByBestAsk{ob.asks})
+	return ob.asks
+}
+
+func (ob *OrderBook) Bids() Limits {
+	sort.Sort(ByBestBid{ob.bids})
+	return ob.bids
 }
