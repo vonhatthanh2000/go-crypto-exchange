@@ -38,3 +38,17 @@ func TestPlaceLimitOrder(t *testing.T) {
 
 	assert(t, len(ob.Bids()), 1)
 }
+
+func TestPlaceMarketOrder(t *testing.T) {
+
+	ob := NewOrderBook()
+
+	buyOrderA := NewOrder(true, 100)
+	ob.PlaceLimitOrder(10_000, buyOrderA)
+	sellOrderA := NewOrder(false, 50.0)
+	matches := ob.PlaceMarketOrder(sellOrderA)
+	assert(t, len(matches), 1)
+	assert(t, matches[0].Bid.Size, 50.0)
+	assert(t, ob.BidLimits[10_000].TotalVolume, 50.0)
+
+}
