@@ -52,3 +52,28 @@ func TestPlaceMarketOrder(t *testing.T) {
 	assert(t, ob.BidLimits[10_000].TotalVolume, 50.0)
 
 }
+
+func TestPlaceMarketOrderMultiFill(t *testing.T) {
+	ob := NewOrderBook()
+
+	buyOrderA := NewOrder(true, 10.0)
+	buyOrderB := NewOrder(true, 15.0)
+	buyOrderC := NewOrder(true, 20.0)
+
+	// place limit orders
+	ob.PlaceLimitOrder(10_000, buyOrderA)
+	ob.PlaceLimitOrder(11_000, buyOrderB)
+	ob.PlaceLimitOrder(12_000, buyOrderC)
+
+	assert(t, ob.BidTotalVolume(), 45.0)
+
+	// place market order
+	sellOrderA := NewOrder(false, 34.0)
+	matchesA := ob.PlaceMarketOrder(sellOrderA)
+	assert(t, len(matchesA), 2)
+
+	sellOrderB := NewOrder(false, 2.0)
+	matchesB := ob.PlaceMarketOrder(sellOrderB)
+	assert(t, len(matchesB), 2)
+
+}

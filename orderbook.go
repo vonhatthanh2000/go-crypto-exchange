@@ -83,13 +83,23 @@ func (l *Limit) deleteOrder(o *Order) {
 func (l *Limit) fill(o *Order) []Match {
 	matches := []Match{}
 
+	orderToDelete := []*Order{}
+
 	for _, order := range l.Orders {
 
 		match := l.fillOrder(o, order)
 		matches = append(matches, match)
+
+		if order.isEmpty() {
+			orderToDelete = append(orderToDelete, order)
+		}
 		if o.isEmpty() {
 			break
 		}
+	}
+
+	for _, order := range orderToDelete {
+		l.deleteOrder(order)
 	}
 
 	return matches
