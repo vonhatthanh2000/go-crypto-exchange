@@ -80,6 +80,10 @@ func (l *Limit) deleteOrder(o *Order) {
 	o.Limit = nil
 }
 
+func (l *Limit) isEmpty() bool {
+	return len(l.Orders) == 0 || l.TotalVolume == 0.0
+}
+
 func (l *Limit) fill(o *Order) []Match {
 	matches := []Match{}
 
@@ -98,6 +102,7 @@ func (l *Limit) fill(o *Order) []Match {
 		}
 	}
 
+	// delete empty orders
 	for _, order := range orderToDelete {
 		l.deleteOrder(order)
 	}
@@ -177,6 +182,8 @@ func (ob *OrderBook) PlaceMarketOrder(o *Order) []Match {
 	matches := []Match{}
 	limitOrders := Limits{}
 
+	var limitToDelete []*Limit
+
 	// fill bid orders with ask limit orders and vice versa
 
 	if o.Bid {
@@ -194,9 +201,20 @@ func (ob *OrderBook) PlaceMarketOrder(o *Order) []Match {
 	for _, limit := range limitOrders {
 		filledMatches := limit.fill(o)
 		matches = append(matches, filledMatches...)
+
+		if limit.isEmpty() {
+			limitToDelete = append(limitToDelete, limit)
+		}
+
 		if o.isEmpty() {
 			break
 		}
+	}
+
+	// if order is bid, clear ask limit, otherwise clear bid limit
+
+	for _, limit := range limitToDelete {
+		ob.clearLimit(!o.Bid, limit)
 	}
 
 	return matches
@@ -249,4 +267,35 @@ func (ob *OrderBook) Asks() Limits {
 func (ob *OrderBook) Bids() Limits {
 	sort.Sort(ByBestBid{ob.bids})
 	return ob.bids
+}
+
+func (ob *OrderBook) clearLimit(bid bool, l *Limit) {
+	// take the limit out of the slice
+	if bid {
+		delete(ob.BidLimits, l.Price)
+		for i, limit := range ob.bids {
+			if limit == l {
+				ob.bids = append(ob.bids[:i], ob.bids[i+1:]...)
+				break
+			}
+		}
+	} else {
+		delete(ob.AskLimits, l.Price)
+		for i, limit := range ob.asks {
+			if limit == l {
+				ob.asks = append(ob.asks[:i], ob.asks[i+1:]...)
+				break
+			}
+		}
+	}
+
+}
+
+func (ob *OrderBook) CancelOrder(o *Order) {
+	limit := o.Limit
+	limit.deleteOrder(o)
+
+	if limit.isEmpty() {
+		ob.clearLimit(o.Bid, limit)
+	}
 }
