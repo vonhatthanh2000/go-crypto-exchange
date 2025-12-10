@@ -1,7 +1,6 @@
 package orderbook
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -24,7 +23,6 @@ func TestLimit(t *testing.T) {
 
 	l.deleteOrder(orderB)
 
-	fmt.Println(l)
 }
 
 func TestPlaceLimitOrder(t *testing.T) {
@@ -37,6 +35,8 @@ func TestPlaceLimitOrder(t *testing.T) {
 	ob.PlaceLimitOrder(10_000, buyOrderB)
 
 	assert(t, len(ob.Bids()), 1)
+	assert(t, len(ob.Orders), 2)
+	assert(t, ob.Orders[buyOrderA.ID], buyOrderA)
 }
 
 func TestPlaceMarketOrder(t *testing.T) {
@@ -114,4 +114,7 @@ func TestCancelOrder(t *testing.T) {
 
 	ob.CancelOrder(buyOrderA)
 	assert(t, len(ob.Bids()), 1)
+
+	_, ok := ob.Orders[buyOrderA.ID]
+	assert(t, ok, false)
 }
