@@ -1,18 +1,27 @@
 package main
 
 import (
+	"crypto/ecdsa"
 	"encoding/json"
+	"fmt"
+	eth_client "go-crypto-exchange/eth-client"
 	"go-crypto-exchange/orderbook"
 	"go-crypto-exchange/pkg/response"
+	"log"
+	"math/big"
 	"net/http"
 
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/labstack/echo/v4"
 )
 
 func main() {
 	e := echo.New()
 
-	exchange := NewExchange()
+	exchange := NewExchange(ExPrivateKey)
+
+	e.HTTPErrorHandler = errorHandler
 
 	e.POST("/order", exchange.handlePlaceOrder)
 	e.DELETE("/order", exchange.handleCancelOrder)
@@ -22,39 +31,150 @@ func main() {
 
 }
 
-type Market string
+func errorHandler(err error, c echo.Context) {
+	fmt.Println("err", err)
+}
+
+type (
+	Market    string
+	OrderType string
+
+	Exchange struct {
+		users      map[int64]*User
+		orders     map[int64]*orderbook.Order
+		PrivateKey *ecdsa.PrivateKey
+		orderbooks map[Market]*orderbook.OrderBook
+		ethClient  *ethclient.Client
+	}
+
+	PlaceOrderRequest struct {
+		Market Market    `json:"market"`
+		UserID int64     `json:"userID"`
+		Type   OrderType `json:"type"`
+		Bid    bool      `json:"bid"`
+		Size   float64   `json:"size"`
+		Price  float64   `json:"price"`
+	}
+
+	MatchedOrder struct {
+		Price float64
+		Size  float64
+		ID    int64
+	}
+
+	Order struct {
+		ID        int64
+		Price     float64
+		Size      float64
+		Bid       bool
+		Timestamp int64
+	}
+
+	OrderBookData struct {
+		TotalBidVolume float64 `json:"totalBidVolume"`
+		TotalAskVolume float64 `json:"totalAskVolume"`
+		Asks           []*Order
+		Bids           []*Order
+	}
+
+	CancelOrderRequest struct {
+		Market Market `json:"market"`
+		ID     int64  `json:"id"`
+	}
+)
+
+type User struct {
+	UserID     int64
+	PrivateKey *ecdsa.PrivateKey
+}
+
+func NewUser(userID int64, privKey string) *User {
+	privateKey, err := crypto.HexToECDSA(privKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &User{UserID: userID, PrivateKey: privateKey}
+}
 
 const (
 	MarketETH Market = "ETH"
-)
 
-type OrderType string
-
-const (
 	OrderTypeLimit  OrderType = "LIMIT"
 	OrderTypeMarket OrderType = "MARKET"
 )
 
-type Exchange struct {
-	orderbooks map[Market]*orderbook.OrderBook
-}
-
-func NewExchange() *Exchange {
+func NewExchange(privKey string) *Exchange {
 
 	orderbooks := make(map[Market]*orderbook.OrderBook)
 	orderbooks[MarketETH] = orderbook.NewOrderBook()
 
+	privateKey, err := crypto.HexToECDSA(privKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ethclient := eth_client.NewEthClient(GANACHE_URL)
+
+	userMap := make(map[int64]*User)
+
+	userMap[1] = NewUser(1, UserInfo.PrivateKey)
+
 	return &Exchange{
+		users:      userMap,
+		orders:     make(map[int64]*orderbook.Order),
+		PrivateKey: privateKey,
 		orderbooks: orderbooks,
+		ethClient:  ethclient,
 	}
 }
 
-type PlaceOrderRequest struct {
-	Market Market    `json:"market"`
-	Type   OrderType `json:"type"`
-	Bid    bool      `json:"bid"`
-	Size   float64   `json:"size"`
-	Price  float64   `json:"price"`
+func (ex *Exchange) handlePlaceLimitOrder(c echo.Context, ob *orderbook.OrderBook, price float64, order *orderbook.Order) error {
+
+	limit := ob.PlaceLimitOrder(price, order)
+
+	orderData := Order{
+		ID:        order.ID,
+		Price:     limit.Price,
+		Size:      order.Size,
+		Bid:       order.Bid,
+		Timestamp: order.Timestamp,
+	}
+
+	// transfer ETH from user to exchange
+	exPublicKey := ex.PrivateKey.Public()
+	exPublicKeyECDSA, ok := exPublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
+	}
+
+	exAddress := crypto.PubkeyToAddress(*exPublicKeyECDSA)
+
+	eth_client.TransferETH(ex.ethClient, ex.users[1].PrivateKey, exAddress, big.NewInt(int64(order.Size)))
+
+	return response.SuccessResponse(c, response.Success, orderData)
+}
+
+func (ex *Exchange) handlePlaceMarketOrder(c echo.Context, ob *orderbook.OrderBook, order *orderbook.Order) error {
+	matches := ob.PlaceMarketOrder(order)
+	// Convert matches to response format
+	matchedOrders := make([]MatchedOrder, len(matches))
+
+	// handle matches
+	for i, match := range matches {
+
+		id := match.Bid.ID
+		if order.Bid {
+			id = match.Ask.ID
+		}
+
+		matchedOrders[i] = MatchedOrder{
+			Size:  match.SizeFilled,
+			Price: match.Price,
+			ID:    id,
+		}
+	}
+
+	return response.SuccessResponse(c, response.Success, matchedOrders)
 }
 
 func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
@@ -69,59 +189,20 @@ func (ex *Exchange) handlePlaceOrder(c echo.Context) error {
 
 	requestOrderType := OrderType(placeOrderData.Type)
 
-	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size)
+	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size, placeOrderData.UserID)
 
 	if requestOrderType == OrderTypeLimit {
-		limit := ob.PlaceLimitOrder(placeOrderData.Price, order)
-
-		orderData := Order{
-			ID:        order.ID,
-			Price:     limit.Price,
-			Size:      order.Size,
-			Bid:       order.Bid,
-			Timestamp: order.Timestamp,
-		}
-		return response.SuccessResponse(c, response.Success, orderData)
+		return ex.handlePlaceLimitOrder(c, ob, placeOrderData.Price, order)
 	} else if requestOrderType == OrderTypeMarket {
-		matches := ob.PlaceMarketOrder(order)
+		fmt.Println("order", order)
 
-		// Convert matches to response format
-		matchResponses := make([]MatchResponse, len(matches))
-		for i, match := range matches {
-			matchResponses[i] = MatchResponse{
-				SizeFilled: match.SizeFilled,
-				Price:      match.Price,
-			}
-		}
-
-		return response.SuccessResponse(c, response.Success, map[string]interface{}{
-			"matches": matchResponses,
-		})
+		return ex.handlePlaceMarketOrder(c, ob, order)
 	} else {
 		return response.FailResponse(c, response.Fail, map[string]string{"error": "invalid order type"})
 	}
 }
 
 // /
-type Order struct {
-	ID        int64
-	Price     float64
-	Size      float64
-	Bid       bool
-	Timestamp int64
-}
-
-type MatchResponse struct {
-	SizeFilled float64 `json:"sizeFilled"`
-	Price      float64 `json:"price"`
-}
-
-type OrderBookData struct {
-	TotalBidVolume float64 `json:"totalBidVolume"`
-	TotalAskVolume float64 `json:"totalAskVolume"`
-	Asks           []*Order
-	Bids           []*Order
-}
 
 func (ex *Exchange) handleGetOrderBook(c echo.Context) error {
 	market := Market(c.Param("market"))
@@ -163,11 +244,6 @@ func (ex *Exchange) handleGetOrderBook(c echo.Context) error {
 	}
 
 	return response.SuccessResponse(c, response.Success, orderBookData)
-}
-
-type CancelOrderRequest struct {
-	Market Market `json:"market"`
-	ID     int64  `json:"id"`
 }
 
 func (ex *Exchange) handleCancelOrder(c echo.Context) error {
